@@ -13,3 +13,11 @@ The resource adversarial checks execute each attack input independently and insp
 On 2026-10-06, the final standalone six-case benchmark run had 6 total cases: 5 successful, 1 failed, and an 83.33% success rate. Measured latency was 73.9522 ms average, 79.6735 ms median/p50, and 169.05 ms nearest-rank p95. The only failure category was `network_failure` for the live GitHub case because outbound network access was unavailable. These are measurements of this run, not a historical baseline; the baseline remains **Not measured yet.**
 
 The regression run completed 23 tests successfully, including 10 resource tests. A separate run executed 14 individual adversarial resource inputs; all 14 were rejected as expected, and none exposed sentinel content. The full cases and outcomes are reported in the implementation task's final report.
+
+## Owner-side container run
+
+The repository owner completed validation in the tested Windows Docker Desktop environment. The container test command `docker run --rm --entrypoint python mcp-personal-developer-server -m unittest discover -s tests -v` passed **23/23 tests** in **0.613 seconds** (`OK`).
+
+The container benchmark completed **6/6 cases successfully (100%)**. Measured average latency was **986.5515 ms**, median/p50 was **5.6525 ms**, and nearest-rank p95 was **5590.466 ms**. Per-case measurements were: `github_repo_info` **5590.466 ms** (successful), `search_project` **1.239 ms**, `git_status` **8.665 ms**, `git_diff` **2.640 ms**, `run_tests` **315.218 ms**, and `read_logs` **1.081 ms**. The average and p95 are dominated by the external GitHub HTTP call in this run; the average is not representative of the local MCP operations. These measurements describe this run only. Baseline: **Not measured yet.**
+
+The owner also reported that MCP stdio smoke validation and `resources/list` succeeded in the container. This observed run validates the tested Windows Docker Desktop environment only; it does not establish production reliability or OS-level sandboxing.

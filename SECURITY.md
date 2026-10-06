@@ -20,7 +20,7 @@ The server may read project source, local logs, Git metadata, and optional GitHu
 
 The Dockerfile uses a non-root UID, keeps application files read-only, and leaves only the application root directory writable for existing test fixtures and explicitly permitted project files. It does not copy `.git`, local environments, logs, or credentials, and it defines no `GITHUB_TOKEN` build-time/default value. Git and CA certificates are the only added operating-system packages. The image exposes no network port and starts the stdio MCP process directly. No host filesystem is mounted by default. A runtime project bind mount expands the container's data boundary; because `run_tests` executes project code, mount only trusted projects and grant only the access those tests need.
 
-These are Dockerfile and build-context controls only. The image has not been built or inspected in this workflow; image-layer contents, effective runtime permissions, and container behavior still require owner-run verification.
+The repository owner completed checks in the tested Windows Docker Desktop environment: the runtime identity was `app` with UID/GID `10001:10001`, and the working directory was `/home/app/project`. The image check confirmed there was no `.git` directory, `.env`, or `.env.local`. MCP stdio smoke validation and `resources/list` succeeded; the latter returned the four allowlisted documentation resources. The successful GitHub benchmark case also confirmed connectivity to GitHub from that container for this run. These observations validate the tested environment only; they do not establish production reliability or OS-level sandboxing, and this server is not a sandbox.
 
 ## Residual risks
 

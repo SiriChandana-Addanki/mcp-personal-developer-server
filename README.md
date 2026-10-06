@@ -73,7 +73,7 @@ docker run --rm -i \
 
 Pass `GITHUB_TOKEN` only at runtime when needed, using the container runtime's environment-variable forwarding (for example `--env GITHUB_TOKEN` after setting it in the host environment). The Dockerfile defines no token default, build argument, or copied `.env` file. `.dockerignore` excludes local credentials, Git metadata, environments, caches, logs, temporary/attack artifacts, and IDE files while retaining the four Markdown resource documents.
 
-This repository preparation has not been built or run in a container. Image size, container-level test results, image-layer secret checks, and container benchmarks remain for the repository owner to verify locally.
+Owner-side validation has been completed in the tested Windows Docker Desktop environment. The container test suite passed 23/23 tests, and the six-case benchmark succeeded 6/6 times. Runtime/security checks and the measured benchmark results are documented in [SECURITY.md](SECURITY.md) and [EVALUATION.md](EVALUATION.md). This validation does not establish production reliability or OS-level sandboxing; the benchmark baseline remains **Not measured yet.**
 
 ## Security and permissions
 
