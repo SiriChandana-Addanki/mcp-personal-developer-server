@@ -28,6 +28,10 @@ Tools perform constrained actions such as Git inspection or an approved test run
 
 There is no generic command runner. Explicit argv vectors and `shell=False` make the process surface inspectable. A custom stdlib JSON-RPC transport avoids a runtime framework dependency and keeps stdio behavior transparent. The protocol stdout is reserved for MCP messages.
 
+## Container packaging
+
+The Dockerfile runs `python -m devserver` directly as UID 10001, preserving MCP stdin/stdout and audit stderr without an HTTP listener or shell wrapper. It copies the application, tests, benchmark script, and documentation resources into `/home/app/project`; local `.git`, environment files, credentials, logs, and development environments are excluded. `PROJECT_ROOT` defaults to that packaged directory. A trusted project can be explicitly mounted and selected with `PROJECT_ROOT` when Git inspection and project test execution are required.
+
 ## Permission boundaries
 
 - The configured root is canonicalized at startup; relative input paths are normalized, checked under it, and denied if any component is a symlink.

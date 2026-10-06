@@ -47,6 +47,34 @@ The server implements `resources/list` and `resources/read`. The allowlisted doc
 
 To exercise resources from an MCP client, call `resources/list`, then pass one returned URI to `resources/read`; for example, `project://README.md`. Local protocol smoke testing can also send `resources/list` and `resources/read` JSON-RPC messages to `python -m devserver` over stdin.
 
+## Container image
+
+The Dockerfile packages the stdlib-only server on the official `python:3.12-slim-bookworm` image. It installs system Git (used by the Git tools and test suite) and CA certificates (used for HTTPS), copies only the application, tests, benchmark script, and the four resource documents, and starts the MCP process directly with `python -m devserver`. It publishes no network port; MCP JSON-RPC remains on stdin/stdout, while audit events remain on stderr.
+
+Build and run locally:
+
+```sh
+docker build -t mcp-personal-developer-server:latest .
+docker run --rm -i -e PROJECT_ROOT=/home/app/project mcp-personal-developer-server:latest
+```
+
+Keep `-i` so the process receives MCP input on stdin; avoid allocating a TTY for protocol use. The container runs as UID 10001. Application code and documentation files are read-only to that user; the project-root directory is writable for the included unittest temporary-file fixtures and explicitly approved runtime files.
+
+The default `PROJECT_ROOT` is the packaged application directory, which has the documentation resources but no `.git` directory or local logs. Consequently `git_status` and `git_diff` safely report that the default root is not a Git repository. To inspect a trusted project, explicitly mount it and set `PROJECT_ROOT` to the mount path. A writable mount is needed to run project tests; tests execute with the container user's permissions and can change files on that mount, so mount only a repository whose tests you trust. No host paths are visible by default.
+
+Example for a trusted project (replace the source with an absolute host path):
+
+```sh
+docker run --rm -i \
+  --mount type=bind,source=/absolute/path/to/trusted/project,target=/workspace \
+  --env PROJECT_ROOT=/workspace \
+  mcp-personal-developer-server:latest
+```
+
+Pass `GITHUB_TOKEN` only at runtime when needed, using the container runtime's environment-variable forwarding (for example `--env GITHUB_TOKEN` after setting it in the host environment). The Dockerfile defines no token default, build argument, or copied `.env` file. `.dockerignore` excludes local credentials, Git metadata, environments, caches, logs, temporary/attack artifacts, and IDE files while retaining the four Markdown resource documents.
+
+This repository preparation has not been built or run in a container. Image size, container-level test results, image-layer secret checks, and container benchmarks remain for the repository owner to verify locally.
+
 ## Security and permissions
 
 See [SECURITY.md](SECURITY.md) for the threat boundary, input checks, output limits, and limitations. In brief: paths are normalized and checked under the canonical configured root; symlinks are denied; private/sensitive file names are skipped or denied; subprocesses use argument arrays, `shell=False`, fixed operations, timeouts, and capped pipe buffers; outputs are bounded; failures avoid returning raw exception details; and GitHub tokens are environment-based and never included in audit records.

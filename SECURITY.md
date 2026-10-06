@@ -16,6 +16,12 @@ The server may read project source, local logs, Git metadata, and optional GitHu
 - **Safe failures:** errors are categorized with generic messages; raw subprocess stderr and exceptions are not returned for infrastructure failures. Tool arguments are never written into audit logs.
 - **Least privilege:** the server performs local read operations, runs the explicitly requested test suite, and makes a single GitHub repository GET. It does not modify Git state or files.
 
+## Container boundary
+
+The Dockerfile uses a non-root UID, keeps application files read-only, and leaves only the application root directory writable for existing test fixtures and explicitly permitted project files. It does not copy `.git`, local environments, logs, or credentials, and it defines no `GITHUB_TOKEN` build-time/default value. Git and CA certificates are the only added operating-system packages. The image exposes no network port and starts the stdio MCP process directly. No host filesystem is mounted by default. A runtime project bind mount expands the container's data boundary; because `run_tests` executes project code, mount only trusted projects and grant only the access those tests need.
+
+These are Dockerfile and build-context controls only. The image has not been built or inspected in this workflow; image-layer contents, effective runtime permissions, and container behavior still require owner-run verification.
+
 ## Residual risks
 
 This is not a sandbox. Test code can perform any action allowed to the server's OS account. Filesystem containment checks can race with concurrent mutation. Secret-name and log-value redaction heuristics are incomplete; callers should not treat project logs as guaranteed secret-free. The Python process inherits its environment, although audit records never serialize it. Restrict the process account, working directory, environment, and network access at the OS/host level for higher assurance.
