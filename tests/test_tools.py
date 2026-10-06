@@ -45,6 +45,13 @@ class ToolTests(unittest.TestCase):
         tests = self.root / "tests"
         tests.mkdir()
         (tests / "__init__.py").write_text("", encoding="utf-8")
+        (tests / "test_discovery.py").write_text(
+            "import unittest\n"
+            "class DiscoveryTest(unittest.TestCase):\n"
+            "    def test_discovery(self):\n"
+            "        self.assertTrue(True)\n",
+            encoding="utf-8",
+        )
         result = self.tools.run_tests("unittest")
         self.assertTrue(result["passed"], result)
 
