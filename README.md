@@ -1,6 +1,6 @@
 # MCP Personal Developer Server
 
-A small local MCP server that gives an AI host controlled, read-oriented access to project search, Git status and diffs, approved tests, project logs, and basic GitHub repository metadata. It solves the gap between a useful coding assistant and an unrestricted shell: the MCP host can request a few explicit operations while the server owns the project boundary and execution policy.
+A small local MCP server that gives an AI host controlled access to project search, Git status and diffs, approved tests, project logs, basic GitHub repository metadata, and read-only project context. It solves the gap between a useful coding assistant and an unrestricted shell: the MCP host can request a few explicit operations and read allowlisted context while the server owns the project boundary and execution policy.
 
 This is a v1 implementation, not a production-readiness claim. It uses Python's standard library and has no runtime dependencies.
 
@@ -8,12 +8,13 @@ This is a v1 implementation, not a production-readiness claim. It uses Python's 
 
 ```text
 AI Host -> MCP stdio client -> JSON-RPC MCP server
-                              -> validate tool and bounded arguments
-                              -> project/Git/test/log/GitHub operation
+                              |-- Tools: validate arguments -> constrained project/Git/test/log/GitHub action
+                              `-- Resources: explicit URI catalog -> bounded read-only context
+                                             -> project documentation / approved log files
                               -> structured result + bounded audit event (stderr)
 ```
 
-The MCP server exposes exactly six tools: `search_project`, `git_status`, `git_diff`, `run_tests`, `read_logs`, and `github_repo_info`. It does not expose arbitrary shell or Git commands.
+**Tools** perform constrained operations. **Resources** provide read-only context; they do not perform actions. The six tool names are `search_project`, `git_status`, `git_diff`, `run_tests`, `read_logs`, and `github_repo_info`. No arbitrary shell or Git commands are exposed.
 
 ## Setup and local execution
 
@@ -40,6 +41,12 @@ Configure the host's MCP client to launch `python -m devserver` with the reposit
 - `read_logs(path, max_bytes=16000)` reads `.log`, `.txt`, or `.jsonl` files within the project root and redacts common inline credential assignments.
 - `github_repo_info(owner, repo)` makes a bounded-time GitHub API GET and returns a small metadata subset.
 
+## MCP resources
+
+The server implements `resources/list` and `resources/read`. The allowlisted documentation resources are `project://README.md`, `project://ARCHITECTURE.md`, `project://SECURITY.md`, and `project://EVALUATION.md` when those files exist. It also lists direct `.log`, `.txt`, and `.jsonl` files in the existing `logs/` or `log/` directories. It does not turn arbitrary project paths into resources. Resource reads are read-only, apply project-root, symlink, sensitive-name, and redaction checks, and reject files larger than **256,000 bytes** without returning partial content.
+
+To exercise resources from an MCP client, call `resources/list`, then pass one returned URI to `resources/read`; for example, `project://README.md`. Local protocol smoke testing can also send `resources/list` and `resources/read` JSON-RPC messages to `python -m devserver` over stdin.
+
 ## Security and permissions
 
 See [SECURITY.md](SECURITY.md) for the threat boundary, input checks, output limits, and limitations. In brief: paths are normalized and checked under the canonical configured root; symlinks are denied; private/sensitive file names are skipped or denied; subprocesses use argument arrays, `shell=False`, fixed operations, timeouts, and capped pipe buffers; outputs are bounded; failures avoid returning raw exception details; and GitHub tokens are environment-based and never included in audit records.
@@ -64,7 +71,7 @@ The benchmark runs local cases and a GitHub API case (which needs network access
 
 ## Observability and failure handling
 
-Each tool call emits a JSON audit record to stderr with UTC timestamp, tool name, generated correlation id, success, latency in milliseconds, and a short error category. It deliberately excludes tool arguments, client-supplied IDs, and environment variables. Tool errors are structured and categorized (`invalid_input`, `path_denied`, `timeout`, `git_failure`, `network_failure`, etc.); GitHub and process failures do not include tokens or raw exception content.
+Each tool and resource operation emits a JSON audit record to stderr with UTC timestamp, operation name, generated correlation id, success, latency in milliseconds, and a short error category. It deliberately excludes tool arguments, resource URIs, contents, client-supplied IDs, and environment variables. Tool errors are structured and categorized (`invalid_input`, `path_denied`, `timeout`, `git_failure`, `network_failure`, etc.); GitHub and process failures do not include tokens or raw exception content.
 
 ## Limitations and future improvements
 

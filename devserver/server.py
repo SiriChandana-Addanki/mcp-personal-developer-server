@@ -23,6 +23,17 @@ def _response(request_id: Any, result: dict[str, Any]) -> None:
     print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}, separators=(",", ":")), flush=True)
 
 
+def _response_error(request_id: Any, outcome: dict[str, Any]) -> None:
+    category = outcome.get("category", "internal_error")
+    code = -32602 if category == "invalid_input" else -32002 if category in {
+        "resource_not_found", "path_denied", "sensitive_path", "output_limit"} else -32603
+    error = outcome.get("result", {}).get("error", {})
+    message = error.get("message", "resource operation failed safely")
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": code, "message": message, "data": {"category": category}}},
+                     separators=(",", ":")), flush=True)
+
+
 def serve() -> None:
     root = os.getenv("PROJECT_ROOT", os.getcwd())
     try:
@@ -41,12 +52,26 @@ def serve() -> None:
             if method == "notifications/initialized" or request_id is None:
                 continue
             if method == "initialize":
-                _response(request_id, {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}},
+                _response(request_id, {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}, "resources": {}},
                                        "serverInfo": {"name": "mcp-personal-developer-server", "version": "0.1.0"}})
             elif method == "ping":
                 _response(request_id, {})
             elif method == "tools/list":
                 _response(request_id, {"tools": TOOLS})
+            elif method == "resources/list":
+                outcome = tools.list_resources(request_id)
+                if outcome["ok"]:
+                    _response(request_id, outcome["result"])
+                else:
+                    _response_error(request_id, outcome)
+            elif method == "resources/read":
+                params = message.get("params")
+                uri = params.get("uri") if isinstance(params, dict) else None
+                outcome = tools.read_resource(uri, request_id)
+                if outcome["ok"]:
+                    _response(request_id, outcome["result"])
+                else:
+                    _response_error(request_id, outcome)
             elif method == "tools/call":
                 params = message.get("params")
                 if not isinstance(params, dict) or not isinstance(params.get("name"), str):

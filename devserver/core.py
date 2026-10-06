@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import itertools
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +26,16 @@ MAX_FILE_BYTES = 1_000_000
 MAX_LOG_BYTES = 64_000
 MAX_OUTPUT = 64_000
 PROCESS_TIMEOUT = 120
+MAX_RESOURCE_BYTES = 256_000
+RESOURCE_DOCUMENTS = {
+    "README.md": ("Project README", "text/markdown"),
+    "ARCHITECTURE.md": ("Project architecture", "text/markdown"),
+    "SECURITY.md": ("Project security model", "text/markdown"),
+    "EVALUATION.md": ("Project evaluation guide", "text/markdown"),
+}
+RESOURCE_LOG_EXTENSIONS = {".log", ".txt", ".jsonl"}
+MAX_RESOURCE_LOGS = 100
+MAX_RESOURCE_LOG_SCAN = 1_000
 SECRET_NAME = re.compile(r"(^|[._-])(\.env|secrets?|credentials?|tokens?|passwords?|private|id_rsa)([._-]|$)", re.I)
 SENSITIVE_EXTENSIONS = {".pem", ".key", ".p12", ".pfx", ".kdbx"}
 SKIP_DIRS = {".git", ".mcp", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
@@ -48,6 +60,11 @@ def _redact(text: str) -> str:
                   "[REDACTED]", text)
     return re.sub(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
                   "[REDACTED PRIVATE KEY]", text)
+
+
+def _sensitive_name(name: str) -> bool:
+    return bool(SECRET_NAME.search(name) or any(
+        suffix.lower() in SENSITIVE_EXTENSIONS for suffix in Path(name).suffixes))
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -76,8 +93,7 @@ def _safe_path(root: Path, relative: str, *, must_exist: bool = False) -> Path:
             raise ToolError("path_denied", "symbolic links are not allowed for file access")
     if must_exist and not resolved.exists():
         raise ToolError("not_found", "requested path does not exist")
-    if any(SECRET_NAME.search(part) or Path(part).suffix.lower() in SENSITIVE_EXTENSIONS
-           for part in resolved.relative_to(root).parts):
+    if any(_sensitive_name(part) for part in resolved.relative_to(root).parts):
         raise ToolError("sensitive_path", "sensitive paths cannot be read")
     return resolved
 
@@ -169,6 +185,145 @@ class DeveloperTools:
                         "error_category": None if success else category})
         except Exception:
             pass
+        return {"ok": success, "result": result, "latency_ms": round(elapsed, 3), "category": category}
+
+    def _audit_resource(self, operation: str, started: float, request_id: Any,
+                        success: bool, category: str) -> float:
+        elapsed = (time.perf_counter() - started) * 1000
+        try:
+            self.audit({"timestamp": datetime.now(timezone.utc).isoformat(), "tool": operation,
+                        "request_id": str(uuid.uuid4()), "success": success,
+                        "latency_ms": round(elapsed, 3),
+                        "error_category": None if success else category})
+        except Exception:
+            pass
+        return elapsed
+
+    def list_resources(self, request_id: Any = None) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            resources = []
+            for relative, (label, mime_type) in self._resource_catalog().items():
+                path = self.root / relative
+                if path.stat().st_size > MAX_RESOURCE_BYTES:
+                    continue
+                resources.append({"uri": f"project://{relative}", "name": label,
+                                  "description": f"Read-only {label.lower()} resource.",
+                                  "mimeType": mime_type})
+            category, success, result = "success", True, {"resources": resources}
+        except Exception:
+            category, success, result = "internal_error", False, {"error": {"category": "internal_error", "message": "resource listing failed safely"}}
+        elapsed = self._audit_resource("resources/list", started, request_id, success, category)
+        return {"ok": success, "result": result, "latency_ms": round(elapsed, 3), "category": category}
+
+    def _resource_catalog(self) -> dict[str, tuple[str, str]]:
+        catalog: dict[str, tuple[str, str]] = {}
+        for relative, (label, mime_type) in RESOURCE_DOCUMENTS.items():
+            try:
+                path = _safe_path(self.root, relative, must_exist=True)
+                if path.is_file():
+                    catalog[relative] = (label, mime_type)
+            except ToolError:
+                continue
+        log_count = 0
+        for directory in ("logs", "log"):
+            try:
+                log_root = _safe_path(self.root, directory, must_exist=True)
+                if not log_root.is_dir():
+                    continue
+                children = sorted(itertools.islice(log_root.iterdir(), MAX_RESOURCE_LOG_SCAN),
+                                  key=lambda item: item.name.casefold())
+            except (ToolError, OSError):
+                continue
+            for child in children:
+                if log_count >= MAX_RESOURCE_LOGS:
+                    break
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", child.name):
+                    continue
+                if child.suffix.lower() not in RESOURCE_LOG_EXTENSIONS:
+                    continue
+                relative = f"{directory}/{child.name}"
+                try:
+                    path = _safe_path(self.root, relative, must_exist=True)
+                    if not path.is_file():
+                        continue
+                except ToolError:
+                    continue
+                mime_type = "application/x-ndjson" if path.suffix.lower() == ".jsonl" else "text/plain"
+                catalog[relative] = (f"Project log: {child.name}", mime_type)
+                log_count += 1
+        return catalog
+
+    @staticmethod
+    def _resource_identifier(uri: str) -> str:
+        if not isinstance(uri, str) or not uri or len(uri) > 2048:
+            raise ToolError("invalid_input", "resource URI is malformed")
+        if not uri.startswith("project://"):
+            raise ToolError("invalid_input", "only project resource URIs are supported")
+        try:
+            parts = urllib.parse.urlsplit(uri)
+        except ValueError:
+            raise ToolError("invalid_input", "resource URI is malformed") from None
+        if parts.scheme != "project" or not parts.netloc or parts.query or parts.fragment:
+            raise ToolError("invalid_input", "resource URI is malformed")
+        if any(char in uri for char in ("%", "\\", "\x00")) or any(char.isspace() for char in uri):
+            raise ToolError("path_denied", "resource URI uses a denied path representation")
+        identifier = parts.netloc + parts.path
+        if identifier.startswith("/") or re.match(r"^[A-Za-z]:", identifier) or ":" in identifier:
+            raise ToolError("path_denied", "absolute paths are not allowed as resources")
+        segments = identifier.split("/")
+        if any(segment in ("", ".", "..") for segment in segments):
+            raise ToolError("path_denied", "resource path traversal is not allowed")
+        if any(ord(char) < 32 for char in identifier):
+            raise ToolError("invalid_input", "resource URI is malformed")
+        return identifier
+
+    def read_resource(self, uri: str, request_id: Any = None) -> dict[str, Any]:
+        started = time.perf_counter()
+        category, success = "success", True
+        try:
+            identifier = self._resource_identifier(uri)
+            parts = identifier.split("/")
+            if any(_sensitive_name(part) for part in parts):
+                raise ToolError("sensitive_path", "sensitive paths cannot be read")
+            log_candidate = (len(parts) == 2 and parts[0] in {"log", "logs"}
+                             and Path(parts[1]).suffix.lower() in RESOURCE_LOG_EXTENSIONS)
+            if identifier not in RESOURCE_DOCUMENTS and not log_candidate:
+                raise ToolError("resource_not_found", "resource is not in the approved catalog")
+            try:
+                path = _safe_path(self.root, identifier, must_exist=True)
+            except ToolError as exc:
+                if exc.category == "not_found":
+                    raise ToolError("resource_not_found", "resource was not found") from None
+                raise
+            catalog = self._resource_catalog()
+            if identifier not in catalog:
+                raise ToolError("resource_not_found", "resource was not found")
+            if not path.is_file():
+                raise ToolError("resource_not_found", "resource was not found")
+            size = path.stat().st_size
+            if size > MAX_RESOURCE_BYTES:
+                raise ToolError("output_limit", "resource exceeds the maximum permitted size")
+            try:
+                with path.open("rb") as stream:
+                    data = stream.read(MAX_RESOURCE_BYTES + 1)
+            except OSError:
+                raise ToolError("internal_error", "resource could not be read safely") from None
+            if len(data) > MAX_RESOURCE_BYTES:
+                raise ToolError("output_limit", "resource exceeds the maximum permitted size")
+            _, mime_type = catalog[identifier]
+            text = data.decode("utf-8", errors="replace")
+            if identifier.split("/", 1)[0] in {"log", "logs"}:
+                text = _redact(text)
+            result = {"contents": [{"uri": uri, "mimeType": mime_type,
+                                    "text": text}]}
+        except ToolError as exc:
+            category, success = exc.category, False
+            result = {"error": {"category": category, "message": str(exc)}}
+        except Exception:
+            category, success = "internal_error", False
+            result = {"error": {"category": category, "message": "resource read failed safely"}}
+        elapsed = self._audit_resource("resources/read", started, request_id, success, category)
         return {"ok": success, "result": result, "latency_ms": round(elapsed, 3), "category": category}
 
     def search_project(self, query: str, path: str = ".", max_results: int = 50) -> dict[str, Any]:

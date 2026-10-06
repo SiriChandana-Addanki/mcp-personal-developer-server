@@ -2,24 +2,29 @@
 
 ## Components and decisions
 
-The project is organized as a small Python package with a stdlib-only runtime. `devserver.server` implements MCP JSON-RPC stdio framing, initialization, ping, tool discovery, and tool calls. `devserver.core.DeveloperTools` owns the policy checks, six tool implementations, process boundaries, result limits, and audit events. `tests/` uses temporary directories and local Git repositories. `evaluate.py` measures a fixed set of cases.
+The project is organized as a small Python package with a stdlib-only runtime. `devserver.server` implements MCP JSON-RPC stdio framing, initialization, ping, tool and resource discovery, tool calls, and resource reads. `devserver.core.DeveloperTools` owns the policy checks, six tool implementations, explicit resource catalog, process boundaries, result limits, and audit events. `tests/` uses temporary directories and local Git repositories. `evaluate.py` measures a fixed set of cases.
 
 ```text
 AI Host
-  | MCP client over stdio
-  v
-devserver.server (MCP JSON-RPC: initialize, tools/list, tools/call)
-  | validated fixed tool name + structured arguments
-  v
-DeveloperTools security boundary
-  |-- search: canonical project paths, skip sensitive/generated content
-  |-- Git: fixed status/diff argv, configured cwd only
-  |-- tests: fixed suite selector, no user command arguments
-  |-- logs: project-contained approved extensions and byte cap
-  `-- GitHub: one HTTPS API metadata GET, optional environment token
   |
-  `-- JSON result to client; secret-free structured audit JSON to stderr
+  v
+MCP stdio
+  |
+  v
+Developer Server
+  |-- Tools: constrained actions (search, Git, tests, logs, GitHub)
+  `-- Resources: explicit read-only project context
+       |
+       v
+Security boundary
+  |
+  v
+Project files / approved logs / GitHub metadata
+  |
+  `--> bounded MCP response; secret-free audit JSON to stderr
 ```
+
+Tools perform constrained actions such as Git inspection or an approved test run. Resources expose constrained read-only context selected by explicit `project://` identifiers. The resource catalog contains existing project documentation and direct log files from the approved `logs/` and `log/` directories; it is not a filesystem browser.
 
 There is no generic command runner. Explicit argv vectors and `shell=False` make the process surface inspectable. A custom stdlib JSON-RPC transport avoids a runtime framework dependency and keeps stdio behavior transparent. The protocol stdout is reserved for MCP messages.
 
@@ -30,6 +35,7 @@ There is no generic command runner. Explicit argv vectors and `shell=False` make
 - Tests accept only the `unittest` and `pytest` selectors and fixed server-defined argv.
 - Logs can only be selected by relative path and allowed extension inside the project root; output is byte-capped and common inline credentials are redacted.
 - GitHub uses a single metadata endpoint with an optional environment token; only selected metadata fields leave the API layer.
+- Resources are listed from an explicit four-document allowlist plus direct `.log`, `.txt`, and `.jsonl` files in approved log directories. Reads enforce the same normalized project-root and symlink checks, sensitive-name rules, redaction for logs, and a 256,000-byte cap.
 - Subprocess duration and retained stdout/stderr are bounded. Audit metadata contains no user arguments or credentials.
 
 ## Failure model
@@ -38,4 +44,4 @@ Tool calls return a stable `{ok, result, latency_ms, category}` envelope interna
 
 ## Limitations
 
-The stdlib transport implements the core MCP lifecycle and tools surface, not optional MCP capabilities such as resources, prompts, sampling, or progress notifications. There is no OS sandbox, so a trusted project's tests execute with the server's permissions. Symlink checks and reads are susceptible to filesystem races. Search skips known secret naming patterns but cannot guarantee secret detection. GitHub is a live external dependency for the benchmark's GitHub case.
+The stdlib transport implements the core MCP lifecycle, tools, and resources surfaces, not optional MCP capabilities such as prompts, sampling, subscriptions, or progress notifications. There is no OS sandbox, so a trusted project's tests execute with the server's permissions. Symlink checks and reads are susceptible to filesystem races. Search and log redaction use heuristics and cannot guarantee secret detection. GitHub is a live external dependency for the benchmark's GitHub case.
