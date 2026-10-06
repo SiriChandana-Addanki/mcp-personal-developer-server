@@ -1,0 +1,12 @@
+[project]
+name = "mcp-personal-developer-server"
+version = "0.1.0"
+description = "A constrained MCP server for project, Git, test, log, and GitHub inspection."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+mcp-personal-developer-server = "devserver.server:main"
+
+[tool.unittest]
+start-directory = "tests"
